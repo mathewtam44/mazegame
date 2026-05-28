@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turtle Maze</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+header { padding: 10px 20px; background: #16213e; display: flex; align-items: center; gap: 15px; }
+header h1 { font-size: 1.4em; }
+header select, header button { padding: 6px 12px; border-radius: 6px; border: none; font-size: 0.9em; cursor: pointer; }
+header select { background: #0f3460; color: #eee; }
+header button { background: #e94560; color: #fff; font-weight: bold; }
+.container { display: flex; flex: 1; overflow: hidden; }
+.maze-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+canvas { background: #0f3460; border-radius: 8px; }
+.code-panel { width: 360px; display: flex; flex-direction: column; padding: 15px; gap: 10px; background: #16213e; }
+.code-panel h2 { font-size: 1.1em; }
+textarea { flex: 1; background: #0a1628; color: #0f0; font-family: 'Courier New', monospace; font-size: 14px; padding: 12px; border: 1px solid #0f3460; border-radius: 6px; resize: none; }
+.code-display { flex: 1; background: #0a1628; font-family: 'Courier New', monospace; font-size: 14px; padding: 12px; border: 1px solid #0f3460; border-radius: 6px; overflow-y: auto; display: none; }
+.code-display .line { padding: 2px 4px; border-radius: 3px; white-space: pre; color: #0f0; }
+.code-display .line.active { background: rgba(76, 175, 80, 0.3); outline: 1px solid #4caf50; }
+.buttons { display: flex; gap: 8px; }
+.buttons button { flex: 1; padding: 10px; border: none; border-radius: 6px; font-size: 1em; font-weight: bold; cursor: pointer; }
+#runBtn { background: #4caf50; color: #fff; }
+#resetBtn { background: #ff9800; color: #fff; }
+#feedback { padding: 10px; border-radius: 6px; min-height: 40px; background: #0a1628; font-size: 0.9em; }
+.help { font-size: 0.8em; background: #0a1628; padding: 10px; border-radius: 6px; line-height: 1.6; }
+.help code { color: #0f0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐢 Turtle Maze</h1>
+  <select id="difficulty">
+    <option value="5">Easy (5×5)</option>
+    <option value="8" selected>Medium (8×8)</option>
+    <option value="12">Hard (12×12)</option>
+  </select>
+  <button id="newMaze">New Maze</button>
+</header>
+<div class="container">
+  <div class="maze-panel"><canvas id="canvas"></canvas></div>
+  <div class="code-panel">
+    <h2>Your Code</h2>
+    <textarea id="code" spellcheck="false" placeholder="Type your commands here...">WHILE CLEAR ( FORWARD )
+RIGHT
+FORWARD 2</textarea>
+    <div id="codeDisplay" class="code-display"></div>
+    <div class="buttons">
+      <button id="runBtn">▶ Run</button>
+      <button id="stepBtn" style="background:#2196f3;color:#fff">⏭ Step</button>
+      <button id="stopBtn" style="background:#e94560;color:#fff;display:none">⏹ Stop</button>
+      <button id="resetBtn">↺ Reset</button>
+    </div>
+    <div id="feedback">Write code to guide the turtle to the red exit!</div>
+    <div class="help">
+      <strong>Commands:</strong><br>
+      <code>FORWARD</code> or <code>FORWARD 3</code> — move forward<br>
+      <code>LEFT</code> — turn left 90°<br>
+      <code>RIGHT</code> — turn right 90°<br>
+      <code>WHILE CLEAR ( ... )</code> — repeat while no wall<br>
+      <code>WHILE WALL ( ... )</code> — repeat while wall ahead<br>
+      <code>WHILE NOT EXIT ( ... )</code> — repeat until exit reached<br>
+      <code>IF WALL ( ... )</code> — do if wall ahead<br>
+      <code>IF CLEAR ( ... )</code> — do if no wall ahead<br>
+      <code>IF WALL ( ... ) ELSE ( ... )</code> — if/else
+    </div>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const codeEl = document.getElementById('code');
+const codeDisplay = document.getElementById('codeDisplay');
+const feedbackEl = document.getElementById('feedback');
+const difficultyEl = document.getElementById('difficulty');
+
+let size, cellSize, maze, turtle, running, turtlePath;
+
+function highlightLine(lineNum) {
+  const lines = codeDisplay.children;
+  for (let i = 0; i < lines.length; i++) lines[i].classList.toggle('active', i === lineNum);
+}
+
+function showCodeDisplay() {
+  const lines = codeEl.value.split('\n');
+  codeDisplay.innerHTML = lines.map(l => `<div class="line">${l || ' '}</div>`).join('');
+  codeEl.style.display = 'none';
+  codeDisplay.style.display = 'block';
+}
+
+function hideCodeDisplay() {
+  codeEl.style.display = '';
+  codeDisplay.style.display = 'none';
+}
+
+// Directions: 0=up, 1=right, 2=down, 3=left
+const DX = [0, 1, 0, -1];
+const DY = [-1, 0, 1, 0];
+const DIR_NAMES = ['↑', '→', '↓', '←'];
+
+function initMaze() {
+  size = parseInt(difficultyEl.value);
+  cellSize = Math.floor(Math.min(500, window.innerHeight - 100) / size);
+  canvas.width = canvas.height = size * cellSize;
+  // Each cell has walls: [top, right, bottom, left]
+  maze = Array.from({length: size}, () => Array.from({length: size}, () => [true, true, true, true]));
+  generateMaze();
+  turtle = { x: 0, y: 0, dir: 1 }; // start top-left facing right
+  turtlePath = [{x: 0, y: 0}];
+  running = false;
+  draw();
+  feedbackEl.textContent = 'Write code to guide the turtle to the red exit!';
+  feedbackEl.style.color = '#eee';
+}
+
+function generateMaze() {
+  const visited = Array.from({length: size}, () => Array(size).fill(false));
+  const stack = [];
+  visited[0][0] = true;
+  stack.push([0, 0]);
+  while (stack.length) {
+    const [cx, cy] = stack[stack.length - 1];
+    const neighbors = [];
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + DX[d], ny = cy + DY[d];
+      if (nx >= 0 && nx < size && ny >= 0 && ny < size && !visited[nx][ny]) neighbors.push([nx, ny, d]);
+    }
+    if (neighbors.length === 0) { stack.pop(); continue; }
+    const [nx, ny, d] = neighbors[Math.floor(Math.random() * neighbors.length)];
+    maze[cx][cy][d] = false;
+    maze[nx][ny][(d + 2) % 4] = false;
+    visited[nx][ny] = true;
+    stack.push([nx, ny]);
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const cs = cellSize;
+  // Draw cells
+  for (let x = 0; x < size; x++) {
+    for (let y = 0; y < size; y++) {
+      const px = x * cs, py = y * cs;
+      ctx.strokeStyle = '#4fc3f7';
+      ctx.lineWidth = 2;
+      const w = maze[x][y];
+      if (w[0]) { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cs, py); ctx.stroke(); }
+      if (w[1]) { ctx.beginPath(); ctx.moveTo(px + cs, py); ctx.lineTo(px + cs, py + cs); ctx.stroke(); }
+      if (w[2]) { ctx.beginPath(); ctx.moveTo(px, py + cs); ctx.lineTo(px + cs, py + cs); ctx.stroke(); }
+      if (w[3]) { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py + cs); ctx.stroke(); }
+    }
+  }
+  // Draw start
+  ctx.fillStyle = 'rgba(76, 175, 80, 0.4)';
+  ctx.fillRect(4, 4, cs - 8, cs - 8);
+  ctx.strokeStyle = '#4caf50';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(4, 4, cs - 8, cs - 8);
+  // Draw exit (checkered flag)
+  const ex = size - 1, ey = size - 1;
+  const ep = 4, es = cs - 8, sq = es / 4;
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#fff' : '#222';
+      ctx.fillRect(ex * cs + ep + c * sq, ey * cs + ep + r * sq, sq, sq);
+    }
+  }
+  // Draw path
+  if (turtlePath && turtlePath.length > 1) {
+    ctx.strokeStyle = 'rgba(76, 175, 80, 0.6)';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(turtlePath[0].x * cs + cs / 2, turtlePath[0].y * cs + cs / 2);
+    for (let i = 1; i < turtlePath.length; i++) {
+      ctx.lineTo(turtlePath[i].x * cs + cs / 2, turtlePath[i].y * cs + cs / 2);
+    }
+    ctx.stroke();
+  }
+  // Draw turtle
+  const tx = turtle.x * cs + cs / 2, ty = turtle.y * cs + cs / 2;
+  ctx.save();
+  ctx.translate(tx, ty);
+  ctx.rotate((turtle.dir + 1) * Math.PI / 2);
+  if (turtle.dir !== 3) ctx.scale(1, -1);
+  ctx.font = `${cs * 0.6}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🐢', 0, 0);
+  ctx.restore();
+}
+
+// Parser
+function parse(code) {
+  const tokens = tokenize(code);
+  return parseBlock(tokens, 0).commands;
+}
+
+function tokenize(code) {
+  const tokens = [];
+  const lines = code.split('\n');
+  for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+    const re = /\b(FORWARD|LEFT|RIGHT|WHILE|NOT|EXIT|IF|WALL|CLEAR|ELSE)\b|(\d+)|([()])/gi;
+    let m;
+    while ((m = re.exec(lines[lineNum])) !== null) {
+      if (m[1]) tokens.push({ type: 'CMD', value: m[1].toUpperCase(), line: lineNum });
+      else if (m[2]) tokens.push({ type: 'NUM', value: parseInt(m[2]), line: lineNum });
+      else if (m[3]) tokens.push({ type: m[3] === '(' ? '{' : '}', line: lineNum });
+    }
+  }
+  return tokens;
+}
+
+function parseBlock(tokens, i) {
+  const commands = [];
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (t.type === '}') return { commands, next: i + 1 };
+    if (t.type === 'CMD') {
+      if (t.value === 'FORWARD') {
+        let steps = 1;
+        if (i + 1 < tokens.length && tokens[i + 1].type === 'NUM') { steps = tokens[i + 1].value; i++; }
+        commands.push({ type: 'FORWARD', steps, line: t.line });
+        i++;
+      } else if (t.value === 'LEFT') { commands.push({ type: 'LEFT', line: t.line }); i++; }
+      else if (t.value === 'RIGHT') { commands.push({ type: 'RIGHT', line: t.line }); i++; }
+      else if (t.value === 'WHILE') {
+        const wLine = t.line;
+        i++;
+        let condition = 'CLEAR';
+        let negate = false;
+        if (i < tokens.length && tokens[i].type === 'CMD' && tokens[i].value === 'NOT') {
+          negate = true; i++;
+        }
+        if (i < tokens.length && tokens[i].type === 'CMD' && (tokens[i].value === 'WALL' || tokens[i].value === 'CLEAR' || tokens[i].value === 'EXIT')) {
+          condition = tokens[i].value; i++;
+        }
+        if (i < tokens.length && tokens[i].type === '{') {
+          i++;
+          const result = parseBlock(tokens, i);
+          commands.push({ type: 'WHILE', condition, negate, body: result.commands, line: wLine });
+          i = result.next;
+        }
+      } else if (t.value === 'IF') {
+        const ifLine = t.line;
+        i++;
+        let condition = 'WALL';
+        if (i < tokens.length && tokens[i].type === 'CMD' && (tokens[i].value === 'WALL' || tokens[i].value === 'CLEAR')) {
+          condition = tokens[i].value; i++;
+        }
+        if (i < tokens.length && tokens[i].type === '{') {
+          i++;
+          const result = parseBlock(tokens, i);
+          let elseBody = null;
+          i = result.next;
+          if (i < tokens.length && tokens[i].type === 'CMD' && tokens[i].value === 'ELSE') {
+            i++;
+            if (i < tokens.length && tokens[i].type === '{') {
+              i++;
+              const elseResult = parseBlock(tokens, i);
+              elseBody = elseResult.commands;
+              i = elseResult.next;
+            }
+          }
+          commands.push({ type: 'IF', condition, body: result.commands, elseBody, line: ifLine });
+        }
+      }
+    } else { i++; }
+  }
+  return { commands, next: i };
+}
+
+function flatten(commands) {
+  const actions = [];
+  for (const cmd of commands) {
+    if (cmd.type === 'FORWARD') { for (let i = 0; i < cmd.steps; i++) actions.push({ type: 'FORWARD', line: cmd.line }); }
+    else if (cmd.type === 'LEFT') actions.push({ type: 'LEFT', line: cmd.line });
+    else if (cmd.type === 'RIGHT') actions.push({ type: 'RIGHT', line: cmd.line });
+    else if (cmd.type === 'WHILE') {
+      actions.push({ type: 'WHILE', condition: cmd.condition, negate: cmd.negate, body: flatten(cmd.body), line: cmd.line });
+    } else if (cmd.type === 'IF') {
+      actions.push({ type: 'IF', condition: cmd.condition, body: flatten(cmd.body), elseBody: cmd.elseBody ? flatten(cmd.elseBody) : null, line: cmd.line });
+    }
+  }
+  return actions;
+}
+
+function wallAhead() {
+  return maze[turtle.x][turtle.y][turtle.dir];
+}
+
+// Executor
+async function executeActions(actions, speed) {
+  for (const action of actions) {
+    if (!running) return;
+    highlightLine(action.line);
+    if (action.type === 'LEFT') { turtle.dir = (turtle.dir + 3) % 4; }
+    else if (action.type === 'RIGHT') { turtle.dir = (turtle.dir + 1) % 4; }
+    else if (action.type === 'IF') {
+      const test = action.condition === 'WALL' ? wallAhead() : !wallAhead();
+      if (test) await executeActions(action.body, speed);
+      else if (action.elseBody) await executeActions(action.elseBody, speed);
+      continue;
+    } else if (action.type === 'WHILE') {
+      let limit = 1000;
+      while (running && limit-- > 0) {
+        highlightLine(action.line);
+        let test;
+        if (action.condition === 'EXIT') test = (turtle.x === size - 1 && turtle.y === size - 1);
+        else if (action.condition === 'WALL') test = wallAhead();
+        else test = !wallAhead();
+        if (action.negate) test = !test;
+        if (!test) break;
+        await executeActions(action.body, speed);
+      }
+      continue;
+    } else if (action.type === 'FORWARD') {
+      const nx = turtle.x + DX[turtle.dir], ny = turtle.y + DY[turtle.dir];
+      if (wallAhead() || nx < 0 || nx >= size || ny < 0 || ny >= size) {
+        feedbackEl.textContent = '💥 Bonk! Hit a wall!';
+        feedbackEl.style.color = '#e94560';
+        draw();
+        const cs = cellSize;
+        ctx.fillStyle = 'rgba(233, 69, 96, 0.5)';
+        ctx.fillRect(turtle.x * cs, turtle.y * cs, cs, cs);
+        running = false;
+        stopBtn.style.display = 'none';
+        runBtn.style.display = '';
+        return;
+      }
+      turtle.x = nx;
+      turtle.y = ny;
+      turtlePath.push({x: nx, y: ny});
+    }
+    draw();
+    await new Promise(r => setTimeout(r, speed));
+  }
+}
+
+// Executor
+async function run() {
+  if (running) return;
+  running = true;
+  runBtn.style.display = 'none';
+  stopBtn.style.display = '';
+  showCodeDisplay();
+  turtle = { x: 0, y: 0, dir: 1 };
+  turtlePath = [{x: 0, y: 0}];
+  draw();
+  feedbackEl.textContent = 'Running...';
+  feedbackEl.style.color = '#4fc3f7';
+
+  let commands;
+  try { commands = parse(codeEl.value); } catch (e) {
+    feedbackEl.textContent = '❌ Code error: ' + e.message;
+    feedbackEl.style.color = '#e94560';
+    running = false;
+    hideCodeDisplay();
+    return;
+  }
+
+  const actions = flatten(commands);
+  if (actions.length === 0) { feedbackEl.textContent = 'No commands to run!'; running = false; hideCodeDisplay(); return; }
+
+  const speed = Math.max(80, 400 - actions.length * 5);
+
+  await executeActions(actions, speed);
+
+  if (turtle.x === size - 1 && turtle.y === size - 1) {
+    feedbackEl.textContent = '🎉 You escaped the maze! Well done!';
+    feedbackEl.style.color = '#4caf50';
+    celebrate();
+  } else {
+    feedbackEl.textContent = `🐢 Turtle stopped at (${turtle.x}, ${turtle.y}). Not at the exit yet!`;
+    feedbackEl.style.color = '#ff9800';
+  }
+  running = false;
+  stopBtn.style.display = 'none';
+  runBtn.style.display = '';
+  hideCodeDisplay();
+}
+
+function celebrate() {
+  const particles = Array.from({length: 80}, () => ({
+    x: canvas.width / 2, y: canvas.height / 2,
+    vx: (Math.random() - 0.5) * 12, vy: (Math.random() - 0.5) * 12 - 4,
+    color: ['#e94560','#4caf50','#ff9800','#4fc3f7','#fff'][Math.floor(Math.random()*5)],
+    life: 1
+  }));
+  let frame;
+  function animate() {
+    draw();
+    let alive = false;
+    for (const p of particles) {
+      if (p.life <= 0) continue;
+      alive = true;
+      p.x += p.vx; p.y += p.vy; p.vy += 0.3; p.life -= 0.015;
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 6, 6);
+    }
+    ctx.globalAlpha = 1;
+    if (alive) frame = requestAnimationFrame(animate);
+  }
+  animate();
+}
+
+let stepState = null;
+
+function stepOne(stack) {
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.index >= frame.actions.length) {
+      stack.pop();
+      if (frame.loop) {
+        const action = frame.loop;
+        let test;
+        if (action.condition === 'EXIT') test = (turtle.x === size - 1 && turtle.y === size - 1);
+        else if (action.condition === 'WALL') test = wallAhead();
+        else test = !wallAhead();
+        if (action.negate) test = !test;
+        if (test) stack.push({ actions: frame.actions, index: 0, loop: frame.loop, line: frame.line });
+      }
+      continue;
+    }
+    const action = frame.actions[frame.index++];
+    if (action.type === 'FORWARD' || action.type === 'LEFT' || action.type === 'RIGHT') return action;
+    if (action.type === 'IF') {
+      const test = action.condition === 'WALL' ? wallAhead() : !wallAhead();
+      const body = test ? action.body : action.elseBody;
+      if (body) stack.push({ actions: body, index: 0 });
+      continue;
+    }
+    if (action.type === 'WHILE') {
+      let test;
+      if (action.condition === 'EXIT') test = (turtle.x === size - 1 && turtle.y === size - 1);
+      else if (action.condition === 'WALL') test = wallAhead();
+      else test = !wallAhead();
+      if (action.negate) test = !test;
+      if (test) stack.push({ actions: action.body, index: 0, loop: action, line: action.line });
+      continue;
+    }
+  }
+  return null;
+}
+
+function step() {
+  if (running) return;
+  if (!stepState) {
+    let commands;
+    try { commands = parse(codeEl.value); } catch (e) {
+      feedbackEl.textContent = '❌ Code error: ' + e.message;
+      feedbackEl.style.color = '#e94560';
+      return;
+    }
+    const actions = flatten(commands);
+    if (actions.length === 0) { feedbackEl.textContent = 'No commands to run!'; return; }
+    turtle = { x: 0, y: 0, dir: 1 };
+    turtlePath = [{x: 0, y: 0}];
+    draw();
+    stepState = { stack: [{ actions, index: 0 }], count: 0 };
+    showCodeDisplay();
+    feedbackEl.textContent = 'Stepping... click Step to advance.';
+    feedbackEl.style.color = '#4fc3f7';
+  }
+  // Execute one step
+  const stack = stepState.stack;
+  const action = stepOne(stack);
+  if (!action) {
+    if (turtle.x === size - 1 && turtle.y === size - 1) {
+      feedbackEl.textContent = '🎉 You escaped the maze! Well done!';
+      feedbackEl.style.color = '#4caf50';
+      celebrate();
+    } else {
+      feedbackEl.textContent = `🐢 Done. Turtle at (${turtle.x}, ${turtle.y}). Not at exit!`;
+      feedbackEl.style.color = '#ff9800';
+    }
+    stepState = null;
+    hideCodeDisplay();
+    return;
+  }
+  highlightLine(action.line);
+  stepState.count++;
+  if (action.type === 'LEFT') turtle.dir = (turtle.dir + 3) % 4;
+  else if (action.type === 'RIGHT') turtle.dir = (turtle.dir + 1) % 4;
+  else if (action.type === 'FORWARD') {
+    if (wallAhead()) {
+      feedbackEl.textContent = '💥 Bonk! Hit a wall!';
+      feedbackEl.style.color = '#e94560';
+      draw();
+      const cs = cellSize;
+      ctx.fillStyle = 'rgba(233, 69, 96, 0.5)';
+      ctx.fillRect(turtle.x * cs, turtle.y * cs, cs, cs);
+      stepState = null;
+      hideCodeDisplay();
+      return;
+    }
+    turtle.x += DX[turtle.dir];
+    turtle.y += DY[turtle.dir];
+    turtlePath.push({x: turtle.x, y: turtle.y});
+  }
+  draw();
+  feedbackEl.textContent = `Step ${stepState.count}`;
+}
+
+const stopBtn = document.getElementById('stopBtn');
+const runBtn = document.getElementById('runBtn');
+
+document.getElementById('runBtn').addEventListener('click', run);
+document.getElementById('stepBtn').addEventListener('click', step);
+stopBtn.addEventListener('click', () => { running = false; feedbackEl.textContent = '⏹ Stopped.'; feedbackEl.style.color = '#ff9800'; });
+document.getElementById('resetBtn').addEventListener('click', () => { running = false; stepState = null; hideCodeDisplay(); stopBtn.style.display = 'none'; runBtn.style.display = ''; turtle = { x: 0, y: 0, dir: 1 }; turtlePath = [{x: 0, y: 0}]; draw(); feedbackEl.textContent = 'Reset! Try again.'; feedbackEl.style.color = '#eee'; });
+document.getElementById('newMaze').addEventListener('click', initMaze);
+difficultyEl.addEventListener('change', initMaze);
+
+initMaze();
+</script>
+</body>
+</html>
